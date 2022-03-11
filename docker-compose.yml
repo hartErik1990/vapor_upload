@@ -1,0 +1,92 @@
+# Docker Compose file for Vapor
+#
+# Install Docker on your system to run and test
+# your Vapor app in a production-like environment.
+#
+# Note: This file is intended for testing and does not 
+# implement best practices for a production deployment.
+#
+# Learn more: https://docs.docker.com/compose/reference/
+#
+#   Build images: docker-compose build
+#      Start app: docker-compose up app
+# Start database: docker-compose up db
+# Run migrations: docker-compose up migrate
+#       Stop all: docker-compose down (add -v to wipe db)
+#
+version: '3.7'
+
+volumes:
+  db_data:
+  web_data:
+  certs:
+
+x-shared_environment: &shared_environment
+  LOG_LEVEL: ${LOG_LEVEL:-debug}
+  DATABASE_HOST: db
+  DATABASE_NAME: vapor_database
+  DATABASE_USERNAME: vapor_username
+  DATABASE_PASSWORD: vapor_password
+
+services:
+  nginx:
+    image: nginx
+    container_name: nginx_proxy
+    env_file: ./variables.env
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - certbot
+      - app
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+      - ./data/certbot/conf:/etc/letsencrypt
+      - ./data/certbot/www:/var/www/certbot
+    command: "/bin/sh -c 'while :; do sleep 6h & wait $${!}; nginx -s reload; done & nginx -g \"daemon off;\"'"
+  certbot:
+    image: certbot/certbot
+    volumes:
+      - ./data/certbot/conf:/etc/letsencrypt
+      - ./data/certbot/www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+  db:
+    image: postgres
+    volumes:
+      - db_data:/db
+  app:
+    image: uploads:latest
+    build:
+      context: .
+    env_file: ./variables.env
+    environment:
+      <<: *shared_environment
+    volumes:
+      - web_data:/run
+    depends_on:
+      - db
+    ports:
+      - "8060:8060"
+    expose:
+      - 8060
+    command: ["serve", "--env", "production", "--hostname", "0.0.0.0", "--port", "8060"]
+  migrate:
+    image: uploads:latest
+    build:
+      context: .
+    environment:
+      <<: *shared_environment
+    depends_on:
+      - db
+    command: ["migrate", "--yes"]
+    deploy:
+      replicas: 0
+  revert:
+    image: uploads:latest
+    build:
+      context: .
+    environment:
+      <<: *shared_environment
+    depends_on:
+      - db
+    command: ["migrate", "--revert", "--yes"]
